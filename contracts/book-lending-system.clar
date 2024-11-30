@@ -102,3 +102,55 @@
                      lending-price: lending-price,
                      borrower: none,
                      borrow-date: none })))))
+
+(define-public (borrow-book (book-id uint))
+  (begin
+    (asserts! (validate-book-id book-id) err-invalid-book-id)
+    (let ((book (unwrap! (map-get? books { book-id: book-id }) err-book-unavailable))
+          (lending-fee-amount (unwrap! (calculate-fee (get lending-price book)) err-invalid-params))
+          (total-cost (+ (get lending-price book) (var-get deposit-requirement))))
+      (asserts! (is-eq (get status book) STATUS_AVAILABLE) err-book-unavailable)
+      (asserts! (not (is-eq (get owner book) tx-sender)) err-unauthorized)
+      (asserts! (>= (stx-get-balance tx-sender) total-cost) err-insufficient-funds)
+      
+      ;; Transfer lending fee to contract owner
+      (unwrap! (stx-transfer? lending-fee-amount tx-sender contract-owner) err-insufficient-funds)
+      ;; Transfer lending price to book owner
+      (unwrap! (stx-transfer? (get lending-price book) tx-sender (get owner book)) err-insufficient-funds)
+      ;; Store deposit
+      (ok (map-set books 
+                   { book-id: book-id }
+                   (merge book { status: STATUS_BORROWED,
+                               borrower: (some tx-sender),
+                               borrow-date: (some block-height) }))))))
+
+(define-public (return-book (book-id uint))
+  (begin
+    (asserts! (validate-book-id book-id) err-invalid-book-id)
+    (let ((book (unwrap! (map-get? books { book-id: book-id }) err-book-unavailable))
+          (borrower (unwrap! (get borrower book) err-invalid-return)))
+      (asserts! (is-eq borrower tx-sender) err-unauthorized)
+      (asserts! (is-eq (get status book) STATUS_BORROWED) err-invalid-return)
+      
+      ;; Return deposit to borrower
+      (unwrap! (stx-transfer? (var-get deposit-requirement) 
+                              contract-owner 
+                              tx-sender) err-insufficient-deposit)
+      
+      (map-delete deposits tx-sender)
+      (ok (map-set books 
+                   { book-id: book-id }
+                   (merge book { status: STATUS_AVAILABLE,
+                               borrower: none,
+                               borrow-date: none }))))))
+
+(define-public (remove-book (book-id uint))
+  (begin
+    (asserts! (validate-book-id book-id) err-invalid-book-id)
+    (let ((book (unwrap! (map-get? books { book-id: book-id }) err-book-unavailable)))
+      (asserts! (is-eq (get owner book) tx-sender) err-not-owner)
+      (asserts! (is-eq (get status book) STATUS_AVAILABLE) err-book-unavailable)
+      (unwrap! (update-book-count tx-sender (- 0 1)) err-invalid-params)
+      (ok (map-set books 
+                   { book-id: book-id }
+                   (merge book { status: STATUS_INACTIVE }))))))
