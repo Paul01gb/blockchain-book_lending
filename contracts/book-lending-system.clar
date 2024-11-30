@@ -23,6 +23,10 @@
 (define-constant err-book-exists (err u107))
 (define-constant err-not-owner (err u108))
 (define-constant err-already-borrowed (err u109))
+(define-constant err-insufficient-funds (err u110))
+(define-constant err-invalid-title (err u111))
+(define-constant err-invalid-author (err u112))
+(define-constant err-invalid-book-id (err u113))
 
 ;; Book status types
 (define-constant STATUS_AVAILABLE u1)
@@ -30,9 +34,71 @@
 (define-constant STATUS_INACTIVE u3)
 
 ;; Data Maps
+(define-map books 
+  { book-id: uint } 
+  {
+    owner: principal,
+    title: (string-ascii 64),
+    author: (string-ascii 64),
+    status: uint,
+    lending-price: uint,
+    borrower: (optional principal),
+    borrow-date: (optional uint)
+  })
 
 (define-map user-books 
   principal 
   { book-count: uint, borrowed-count: uint })
 
 (define-map deposits principal uint)
+
+;; Private Functions
+(define-private (validate-string-input (input (string-ascii 64)))
+  (and (not (is-eq input "")) 
+       (<= (len input) u64)))
+
+(define-private (validate-book-id (book-id uint))
+  (and (>= book-id u0) 
+       (< book-id (var-get total-books))))
+
+(define-private (check-user-limits (user principal))
+  (let ((user-data (default-to { book-count: u0, borrowed-count: u0 } 
+                              (map-get? user-books user))))
+    (ok (< (get book-count user-data) (var-get max-books-per-user)))))
+
+(define-private (calculate-fee (amount uint))
+  (ok (/ (* amount (var-get lending-fee)) u100)))
+
+(define-private (update-book-count (user principal) (delta int))
+  (let ((current-data (default-to { book-count: u0, borrowed-count: u0 } 
+                                (map-get? user-books user))))
+    (ok (map-set user-books 
+                 user 
+                 { book-count: (if (< delta 0)
+                                  (- (get book-count current-data) (to-uint (- 0 delta)))
+                                  (+ (get book-count current-data) (to-uint delta))),
+                   borrowed-count: (get borrowed-count current-data) }))))
+
+;; Public Functions
+(define-public (list-book (title (string-ascii 64)) 
+                         (author (string-ascii 64)) 
+                         (lending-price uint))
+  (begin
+    ;; Validate inputs
+    (asserts! (validate-string-input title) err-invalid-title)
+    (asserts! (validate-string-input author) err-invalid-author)
+    (asserts! (> lending-price u0) err-invalid-params)
+    
+    (let ((book-id (var-get total-books)))
+      (asserts! (unwrap! (check-user-limits tx-sender) err-limit-exceeded) err-limit-exceeded)
+      (unwrap! (update-book-count tx-sender 1) err-invalid-params)
+      (var-set total-books (+ book-id u1))
+      (ok (map-set books 
+                   { book-id: book-id }
+                   { owner: tx-sender,
+                     title: title,
+                     author: author,
+                     status: STATUS_AVAILABLE,
+                     lending-price: lending-price,
+                     borrower: none,
+                     borrow-date: none })))))
