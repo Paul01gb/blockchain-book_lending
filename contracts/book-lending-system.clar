@@ -88,7 +88,7 @@
     (asserts! (validate-string-input title) err-invalid-title)
     (asserts! (validate-string-input author) err-invalid-author)
     (asserts! (> lending-price u0) err-invalid-params)
-    
+
     (let ((book-id (var-get total-books)))
       (asserts! (unwrap! (check-user-limits tx-sender) err-limit-exceeded) err-limit-exceeded)
       (unwrap! (update-book-count tx-sender 1) err-invalid-params)
@@ -112,7 +112,7 @@
       (asserts! (is-eq (get status book) STATUS_AVAILABLE) err-book-unavailable)
       (asserts! (not (is-eq (get owner book) tx-sender)) err-unauthorized)
       (asserts! (>= (stx-get-balance tx-sender) total-cost) err-insufficient-funds)
-      
+
       ;; Transfer lending fee to contract owner
       (unwrap! (stx-transfer? lending-fee-amount tx-sender contract-owner) err-insufficient-funds)
       ;; Transfer lending price to book owner
@@ -131,12 +131,12 @@
           (borrower (unwrap! (get borrower book) err-invalid-return)))
       (asserts! (is-eq borrower tx-sender) err-unauthorized)
       (asserts! (is-eq (get status book) STATUS_BORROWED) err-invalid-return)
-      
+
       ;; Return deposit to borrower
       (unwrap! (stx-transfer? (var-get deposit-requirement) 
                               contract-owner 
                               tx-sender) err-insufficient-deposit)
-      
+
       (map-delete deposits tx-sender)
       (ok (map-set books 
                    { book-id: book-id }
@@ -192,3 +192,11 @@
 
 (define-read-only (get-total-books)
   (ok (var-get total-books)))
+
+;; Check if a book is borrowed
+(define-read-only (is-book-borrowed (book-id uint))
+  (begin
+    ;; Returns true if the book is borrowed
+    (asserts! (validate-book-id book-id) err-invalid-book-id)
+    (let ((book (unwrap! (map-get? books { book-id: book-id }) err-book-unavailable)))
+      (ok (is-eq (get status book) STATUS_BORROWED)))))
