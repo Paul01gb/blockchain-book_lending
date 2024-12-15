@@ -154,3 +154,66 @@
       (ok (map-set books 
                    { book-id: book-id }
                    (merge book { status: STATUS_INACTIVE }))))))
+
+;; Admin Functions
+(define-public (set-lending-fee (new-fee uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-unauthorized)
+    (asserts! (<= new-fee u100) err-invalid-params)
+    (ok (var-set lending-fee new-fee))))
+
+(define-public (set-max-lending-period (new-period uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-unauthorized)
+    (asserts! (> new-period u0) err-invalid-params)
+    (ok (var-set max-lending-period new-period))))
+
+;; Read-only Functions
+(define-read-only (get-book-details (book-id uint))
+  (begin
+    (asserts! (validate-book-id book-id) err-invalid-book-id)
+    (ok (unwrap! (map-get? books { book-id: book-id }) err-book-unavailable))))
+
+(define-read-only (get-user-books (user principal))
+  (ok (default-to { book-count: u0, borrowed-count: u0 } 
+                 (map-get? user-books user))))
+
+(define-read-only (get-lending-fee)
+  (ok (var-get lending-fee)))
+
+(define-read-only (get-max-lending-period)
+  (ok (var-get max-lending-period)))
+
+(define-read-only (get-deposit-requirement)
+  (ok (var-get deposit-requirement)))
+
+(define-read-only (get-user-deposit (user principal))
+  (ok (default-to u0 (map-get? deposits user))))
+
+(define-read-only (get-total-books)
+  (ok (var-get total-books)))
+
+;; Check if a book is borrowed
+(define-read-only (is-book-borrowed (book-id uint))
+  (begin
+    ;; Returns true if the book is borrowed
+    (asserts! (validate-book-id book-id) err-invalid-book-id)
+    (let ((book (unwrap! (map-get? books { book-id: book-id }) err-book-unavailable)))
+      (ok (is-eq (get status book) STATUS_BORROWED)))))
+
+;; Check the status of a book
+(define-read-only (check-book-status (book-id uint))
+  (ok (get status (unwrap! (map-get? books { book-id: book-id }) err-book-unavailable))))
+
+;; Function to check if a book can be borrowed
+(define-read-only (is-book-borrowable (book-id uint))
+  (begin
+    (asserts! (validate-book-id book-id) err-invalid-book-id)
+    (let ((book (unwrap! (map-get? books { book-id: book-id }) err-book-unavailable)))
+      (ok (is-eq (get status book) STATUS_AVAILABLE)))))
+
+;; Test function to verify the borrower details of a book
+(define-read-only (get-borrower-details (book-id uint))
+  (begin
+    (asserts! (validate-book-id book-id) err-invalid-book-id)
+    (ok (get borrower (unwrap! (map-get? books { book-id: book-id }) err-book-unavailable)))))
