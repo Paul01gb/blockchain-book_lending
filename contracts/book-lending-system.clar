@@ -61,6 +61,10 @@
   (and (>= book-id u0) 
        (< book-id (var-get total-books))))
 
+;; Optimized function to calculate the lending fee
+(define-private (optimized-calculate-fee (amount uint))
+  (ok (/ (* amount (var-get lending-fee)) u100)))
+
 (define-private (check-user-limits (user principal))
   (let ((user-data (default-to { book-count: u0, borrowed-count: u0 } 
                               (map-get? user-books user))))
@@ -78,6 +82,37 @@
                                   (- (get book-count current-data) (to-uint (- 0 delta)))
                                   (+ (get book-count current-data) (to-uint delta))),
                    borrowed-count: (get borrowed-count current-data) }))))
+
+;; Check if user has active books
+(define-private (has-active-books (user principal))
+  (begin
+    ;; Returns true if the user has active books listed
+    (let ((user-data (default-to { book-count: u0, borrowed-count: u0 } 
+                                 (map-get? user-books user))))
+      (ok (> (get book-count user-data) u0)))))
+
+;; Validate that the lending price is within reasonable bounds
+(define-private (validate-lending-price (price uint))
+  (ok (and (> price u0) (<= price u1000000))))
+
+;; Helper function to calculate late fee based on days overdue
+(define-private (calculate-late-fee (days-overdue uint))
+  (ok (* days-overdue u100)))
+
+;; Check if the user is eligible to borrow more books
+(define-private (check-borrowing-limits (user principal))
+  (let ((user-data (default-to { book-count: u0, borrowed-count: u0 } 
+                              (map-get? user-books user))))
+    (ok (< (get borrowed-count user-data) u5))))
+
+;; Fetch the current book owner
+(define-private (get-book-owner (book-id uint))
+  (let ((book (unwrap! (map-get? books { book-id: book-id }) err-book-unavailable)))
+    (ok (get owner book))))
+
+;; Validate that the borrow date is within the allowed lending period
+(define-private (validate-borrow-date (borrow-date uint))
+  (ok (<= (- block-height borrow-date) (var-get max-lending-period))))
 
 ;; Public Functions
 (define-public (list-book (title (string-ascii 64)) 
@@ -144,6 +179,27 @@
                                borrower: none,
                                borrow-date: none }))))))
 
+;; Update lending price for a book
+(define-public (update-lending-price (book-id uint) (new-price uint))
+  (begin
+    ;; Updates the lending price for a book if the sender is the owner
+    (asserts! (validate-book-id book-id) err-invalid-book-id)
+    (asserts! (> new-price u0) err-invalid-params)
+    (let ((book (unwrap! (map-get? books { book-id: book-id }) err-book-unavailable)))
+      (asserts! (is-eq (get owner book) tx-sender) err-not-owner)
+      (ok (map-set books { book-id: book-id } (merge book { lending-price: new-price }))))))
+
+;; Allows the book owner to update the title
+(define-public (change-book-title (book-id uint) (new-title (string-ascii 64)))
+  (begin
+    (asserts! (validate-string-input new-title) err-invalid-title)
+    (asserts! (validate-book-id book-id) err-invalid-book-id)
+    (let ((book (unwrap! (map-get? books { book-id: book-id }) err-book-unavailable)))
+      (asserts! (is-eq (get owner book) tx-sender) err-not-owner)
+      (ok (map-set books 
+                   { book-id: book-id } 
+                   (merge book { title: new-title })))))) 
+
 (define-public (remove-book (book-id uint))
   (begin
     (asserts! (validate-book-id book-id) err-invalid-book-id)
@@ -162,11 +218,41 @@
     (asserts! (<= new-fee u100) err-invalid-params)
     (ok (var-set lending-fee new-fee))))
 
+;; Admin function to set the maximum number of books a user can list
+(define-public (set-max-books-per-user (max-books uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-unauthorized)
+    (asserts! (> max-books u0) err-invalid-params)
+    (ok (var-set max-books-per-user max-books))))
+
 (define-public (set-max-lending-period (new-period uint))
   (begin
     (asserts! (is-eq tx-sender contract-owner) err-unauthorized)
     (asserts! (> new-period u0) err-invalid-params)
     (ok (var-set max-lending-period new-period))))
+
+;; Admin function to adjust deposit requirement
+(define-public (set-deposit-requirement (new-requirement uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-unauthorized)
+    (asserts! (> new-requirement u0) err-invalid-params)
+    (ok (var-set deposit-requirement new-requirement))))
+
+;; Allow user to donate a book without listing fee
+(define-public (donate-book (title (string-ascii 64)) (author (string-ascii 64)))
+  (begin
+    (asserts! (validate-string-input title) err-invalid-title)
+    (asserts! (validate-string-input author) err-invalid-author)
+    (let ((book-id (var-get total-books)))
+      (var-set total-books (+ book-id u1))
+      (ok (map-set books { book-id: book-id }
+                   { owner: contract-owner,
+                     title: title,
+                     author: author,
+                     status: STATUS_AVAILABLE,
+                     lending-price: u0,
+                     borrower: none,
+                     borrow-date: none })))))
 
 ;; Read-only Functions
 (define-read-only (get-book-details (book-id uint))
@@ -200,7 +286,7 @@
     (asserts! (validate-book-id book-id) err-invalid-book-id)
     (let ((book (unwrap! (map-get? books { book-id: book-id }) err-book-unavailable)))
       (ok (is-eq (get status book) STATUS_BORROWED)))))
-
+ 
 ;; Check the status of a book
 (define-read-only (check-book-status (book-id uint))
   (ok (get status (unwrap! (map-get? books { book-id: book-id }) err-book-unavailable))))
